@@ -10,8 +10,10 @@ using Test, Random, Plots
 using ReferenceTests, ImageIO
 using StatsBase
 
+const TT = TableTransforms
+
 # set default configurations for plots
-gr(ms=2, mc=:black, aspectratio=:equal,
+gr(ms=1, mc=:black, aspectratio=:equal,
    label=false, size=(600,400))
 
 # workaround GR warnings
@@ -22,6 +24,10 @@ isCI = "CI" ∈ keys(ENV)
 islinux = Sys.islinux()
 visualtests = !isCI || (isCI && islinux)
 datadir = joinpath(@__DIR__,"data")
+
+# using MersenneTwister for backward
+# compatibility with old Julia versions
+rng = MersenneTwister(42)
 
 # for functor tests in Functional testset
 struct Polynomial{T<:Real}
@@ -38,11 +44,15 @@ function isequalmissing(a, b)
   return true
 end
 
+include("metatable.jl")
+
 # list of tests
 testfiles = [
   "distributions.jl",
   "colspec.jl",
   "transforms.jl",
+  "metadata.jl",
+  "tableselection.jl",
   "shows.jl"
 ]
 

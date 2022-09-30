@@ -7,8 +7,10 @@
 
 The transform that applies the function `Tables.rowtable` to to the input table.
 """
-struct RowTable <: Stateless end
+struct RowTable <: StatelessFeatureTransform end
 
-apply(::RowTable, table) = Tables.rowtable(table), table
+isrevertible(::Type{RowTable}) = true
 
-revert(::RowTable, newtable, cache) = cache
+applyfeat(::RowTable, feat, prep) = Tables.rowtable(feat), feat
+
+revertfeat(::RowTable, newfeat, fcache) = fcache

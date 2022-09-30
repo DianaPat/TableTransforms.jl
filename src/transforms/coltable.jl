@@ -7,8 +7,10 @@
 
 The transform that applies the function `Tables.columntable` to to the input table.
 """
-struct ColTable <: Stateless end
+struct ColTable <: StatelessFeatureTransform end
 
-apply(::ColTable, table) = Tables.columntable(table), table
+isrevertible(::Type{ColTable}) = true
 
-revert(::ColTable, newtable, cache) = cache
+applyfeat(::ColTable, feat, prep) = Tables.columntable(feat), feat
+
+revertfeat(::ColTable, newfeat, fcache) = fcache

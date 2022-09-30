@@ -16,7 +16,7 @@ Levels(:a => 1:3, :b => ["a", "b"], ordered=[:a])
 Levels("a" => 1:3, "b" => ["a", "b"], ordered=["b"])
 ```
 """
-struct Levels{S<:ColSpec,O<:ColSpec,L} <: Stateless
+struct Levels{S<:ColSpec,O<:ColSpec,L} <: StatelessFeatureTransform
   colspec::S
   ordered::O
   levels::L
@@ -29,8 +29,8 @@ Levels(; kwargs...) = throw(ArgumentError("Cannot create a Levels object without
 
 isrevertible(transform::Levels) = true
 
-function apply(transform::Levels, table)
-  cols = Tables.columns(table)
+function applyfeat(transform::Levels, feat, prep)
+  cols = Tables.columns(feat)
   names = Tables.columnnames(cols)
   snames = choose(transform.colspec, names)
   ordered = choose(transform.ordered, snames)
@@ -55,22 +55,23 @@ function apply(transform::Levels, table)
     y, revfunc
   end
 
-  columns, cache = first.(results), last.(results)
+  columns, fcache = first.(results), last.(results)
 
   𝒯 = (; zip(names, columns)...)
-  newtable = 𝒯 |> Tables.materializer(table)
-  newtable, cache
+  newfeat = 𝒯 |> Tables.materializer(feat)
+
+  newfeat, fcache
 end
 
-function revert(::Levels, newtable, cache)
-  cols = Tables.columns(newtable)
+function revertfeat(::Levels, newfeat, fcache)
+  cols = Tables.columns(newfeat)
   names = Tables.columnnames(cols)
 
-  columns = map(names, cache) do nm, revfunc
+  columns = map(names, fcache) do nm, revfunc
     x = Tables.getcolumn(cols, nm)
     revfunc(x)
   end
 
   𝒯 = (; zip(names, columns)...)
-  𝒯 |> Tables.materializer(newtable)
+  𝒯 |> Tables.materializer(newfeat)
 end

@@ -16,7 +16,7 @@ OneHot(:a)
 OneHot("a")
 ```
 """
-struct OneHot{S<:ColSpec} <: Stateless
+struct OneHot{S<:ColSpec} <: StatelessFeatureTransform
   colspec::S
   function OneHot(col::Col)
     cs = colspec([col])
@@ -26,8 +26,8 @@ end
 
 isrevertible(::Type{<:OneHot}) = true
 
-function apply(transform::OneHot, table)
-  cols = Tables.columns(table)
+function applyfeat(transform::OneHot, feat, prep)
+  cols = Tables.columns(feat)
   names = Tables.columnnames(cols) |> collect
   columns = Any[Tables.getcolumn(cols, nm) for nm in names]
   
@@ -54,16 +54,16 @@ function apply(transform::OneHot, table)
   inds = ind:(ind + length(newnms) - 1)
 
   𝒯 = (; zip(names, columns)...)
-  newtable = 𝒯 |> Tables.materializer(table)
-  newtable, (name, inds, xl, isordered(x))
+  newfeat = 𝒯 |> Tables.materializer(feat)
+  newfeat, (name, inds, xl, isordered(x))
 end
 
-function revert(::OneHot, newtable, cache)
-  cols = Tables.columns(newtable)
+function revertfeat(::OneHot, newfeat, fcache)
+  cols = Tables.columns(newfeat)
   names = Tables.columnnames(cols) |> collect
   columns = Any[Tables.getcolumn(cols, nm) for nm in names]
   
-  oname, inds, levels, ordered = cache
+  oname, inds, levels, ordered = fcache
   x = map(zip(columns[inds]...)) do row
     levels[findfirst(row)]
   end
@@ -74,5 +74,5 @@ function revert(::OneHot, newtable, cache)
   splice!(columns, inds, [ocolumn])
 
   𝒯 = (; zip(names, columns)...)
-  𝒯 |> Tables.materializer(newtable)
+  𝒯 |> Tables.materializer(newfeat)
 end

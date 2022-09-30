@@ -14,7 +14,7 @@ Default to `:upper` case specification.
 * `:camel` - Camelcase, e.g. ColumnName
 * `:snake` - Snakecase, e.g. column_name
 """
-struct StdNames <: Stateless
+struct StdNames <: StatelessFeatureTransform
   spec::Symbol
 end
 
@@ -22,12 +22,12 @@ StdNames() = StdNames(:upper)
 
 isrevertible(::Type{StdNames}) = true
 
-function apply(transform::StdNames, table)  
+function applyfeat(transform::StdNames, feat, prep)  
   # retrieve spec
   spec = transform.spec
   
   # retrieve column names
-  cols = Tables.columns(table)
+  cols = Tables.columns(feat)
   oldnames = string.(Tables.columnnames(cols))
   
   # clean column names
@@ -42,15 +42,15 @@ function apply(transform::StdNames, table)
   newnames = _unique(names)
   
   # rename transform
-  rtrans = Rename(Dict(oldnames .=> newnames))
-  newtable, rcache = apply(rtrans, table)
+  rtrans = Rename(colspec(oldnames), Symbol.(newnames))
+  newfeat, rfcache = applyfeat(rtrans, feat, prep)
 
-  newtable, (rtrans, rcache)
+  newfeat, (rtrans, rfcache)
 end
 
-function revert(::StdNames, newtable, cache)
-  rtrans, rcache = cache
-  revert(rtrans, newtable, rcache)
+function revertfeat(::StdNames, newfeat, fcache)
+  rtrans, rfcache = fcache
+  revertfeat(rtrans, newfeat, rfcache)
 end
 
 const delim = [' ', '\t', '-', '_']

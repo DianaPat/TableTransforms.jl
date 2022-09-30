@@ -1,7 +1,3 @@
-```@meta
-CurrentModule = TableTransforms
-```
-
 # TableTransforms.jl
 
 *Transforms and pipelines with tabular data.*
@@ -50,14 +46,6 @@ our long term vision is more ambitious. We aim to provide a complete
 user experience with fully-featured pipelines that include standardization
 of column names, imputation of missing data, and more.*
 
-## Installation
-
-Get the latest stable release with Julia's package manager:
-
-```julia
-] add TableTransforms
-```
-
 ## Usage
 
 Consider the following table and its corner plot:
@@ -93,7 +81,7 @@ or to any marginal distribution:
 using Distributions
 
 # convert to any Distributions.jl
-table |> Quantile(Normal()) |> corner
+table |> Quantile(dist=Normal()) |> corner
 ```
 
 Below is a more sophisticated example with a pipeline that has
@@ -127,9 +115,9 @@ To revert a pipeline or single transform, use the [`apply`](@ref) and [`revert`]
 functions instead. The function [`isrevertible`](@ref) can be used to check if a transform is revertible.
 
 ```@docs
-apply
-revert
-isrevertible
+TransformsAPI.apply
+TransformsAPI.revert
+TransformsAPI.isrevertible
 ```
 
 To exemplify the use of these functions, let's create a table:
@@ -168,7 +156,7 @@ Finally, it is sometimes useful to [`reapply`](@ref) a transform that was
 cache from a previous [`apply`](@ref) call is used:
 
 ```@docs
-reapply
+TransformsAPI.reapply
 ```
 
 Consider the following example:

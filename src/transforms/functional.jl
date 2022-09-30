@@ -21,7 +21,7 @@ Functional(:a => cos, :b => sin)
 Functional("a" => cos, "b" => sin)
 ```
 """
-struct Functional{S<:ColSpec,F} <: Stateless
+struct Functional{S<:ColSpec,F} <: StatelessFeatureTransform
   colspec::S
   func::F
 end
@@ -58,8 +58,8 @@ isrevertible(transform::Functional) =
 _funcdict(func, names) = Dict(nm => func for nm in names)
 _funcdict(func::Tuple, names) = Dict(names .=> func)
 
-function apply(transform::Functional, table) 
-  cols = Tables.columns(table)
+function applyfeat(transform::Functional, feat, prep) 
+  cols = Tables.columns(feat)
   names = Tables.columnnames(cols)
   snames = choose(transform.colspec, names)
   funcs = _funcdict(transform.func, snames)
@@ -76,17 +76,17 @@ function apply(transform::Functional, table)
   end
 
   𝒯 = (; zip(names, columns)...)
-  newtable = 𝒯 |> Tables.materializer(table)
-  return newtable, (snames, funcs)
+  newfeat = 𝒯 |> Tables.materializer(feat)
+  return newfeat, (snames, funcs)
 end
 
-function revert(transform::Functional, newtable, cache)
-  @assert isrevertible(transform) "Transform is not revertible."
+function revertfeat(transform::Functional, newfeat, fcache)
+  @assert isrevertible(transform) "TableTransform is not revertible."
 
-  cols = Tables.columns(newtable)
+  cols = Tables.columns(newfeat)
   names = Tables.columnnames(cols)
   
-  snames, funcs = cache
+  snames, funcs = fcache
 
   columns = map(names) do nm
     y = Tables.getcolumn(cols, nm)
@@ -101,5 +101,5 @@ function revert(transform::Functional, newtable, cache)
   end
 
   𝒯 = (; zip(names, columns)...)
-  𝒯 |> Tables.materializer(newtable)
+  𝒯 |> Tables.materializer(newfeat)
 end

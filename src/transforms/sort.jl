@@ -24,7 +24,7 @@ Sort(("a", "c", "e"))
 Sort(r"[ace]")
 ```
 """
-struct Sort{S<:ColSpec,T} <: Stateless
+struct Sort{S<:ColSpec,T} <: StatelessFeatureTransform
   colspec::S
   kwargs::T
 end
@@ -38,30 +38,41 @@ Sort(; kwargs...) = throw(ArgumentError("Cannot create a Sort object without arg
 
 isrevertible(::Type{<:Sort}) = true
 
-function apply(transform::Sort, table)
-  cols = Tables.columns(table)
-  names = Tables.columnnames(cols)
+function preprocess(transform::Sort, table)
+  cols   = Tables.columns(table)
+  names  = Tables.columnnames(cols)
   snames = choose(transform.colspec, names)
-  
-  # use selected columns to calculate new order
-  scols = collect(zip(Tables.getcolumn.(Ref(cols), snames)...))
-  inds = sortperm(scols; transform.kwargs...)
 
-  # sort rows
-  rows = Tables.rowtable(table)
-  rows = rows[inds]
-
-  newtable = rows |> Tables.materializer(table)
-  newtable, inds
+  # use selected columns to calculate new indices
+  scols = Tables.getcolumn.(Ref(cols), snames)
+  stups = collect(zip(scols...))
+  sortperm(stups; transform.kwargs...)
 end
 
-function revert(::Sort, newtable, cache)
-  # use cache to recalculate old order
-  inds = sortperm(cache)
+function applyfeat(::Sort, feat, prep)
+  # collect all rows
+  rows = Tables.rowtable(feat)
 
-  # undo rows sort
-  rows = Tables.rowtable(newtable)
-  rows = rows[inds]
+  # sorting indices
+  sinds = prep
 
-  rows |> Tables.materializer(newtable)
+  # sorted rows
+  srows = view(rows, sinds)
+
+  newfeat = srows |> Tables.materializer(feat)
+
+  newfeat, sinds
+end
+
+function revertfeat(::Sort, newfeat, fcache)
+  # collect all rows
+  rows = Tables.rowtable(newfeat)
+
+  # reverting indices
+  sinds = fcache
+  rinds = sortperm(sinds)
+
+  rrows = view(rows, rinds)
+
+  rrows |> Tables.materializer(newfeat)
 end

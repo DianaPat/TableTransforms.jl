@@ -3,79 +3,97 @@
 # ------------------------------------------------------------------
 
 """
-    Transform
+    TableTransform
 
 A transform that takes a table as input and produces a new table.
-Any transform implementing the `Transform` trait should implement the
+Any transform implementing the `TableTransform` trait should implement the
 [`apply`](@ref) function. If the transform [`isrevertible`](@ref),
 then it should also implement the [`revert`](@ref) function.
 
 A functor interface is automatically generated from the functions
-above, which means that any transform implementing the `Transform`
+above, which means that any transform implementing the `TableTransform`
 trait can be evaluated directly at any table implementing the
 [Tables.jl](https://github.com/JuliaData/Tables.jl) interface.
 """
-abstract type Transform end
+abstract type TableTransform <: Transform end
 
 """
-    assertions(transform)
+    FeatureTransform
 
-Returns a list of assertion functions for the `transform`. An assertion
-function is a function that takes a table as input and checks if the table
-is valid for the `transform`.
+A transform that operates on the columns of the table containing
+features, i.e., simple attributes such as numbers, strings, etc.
 """
-function assertions end
-
-"""
-    isrevertible(transform)
-
-Tells whether or not the `transform` is revertible, i.e. supports a
-[`revert`](@ref) function. Defaults to `false` for new types.
-"""
-function isrevertible end
+abstract type FeatureTransform <: TableTransform end
 
 """
-    newtable, cache = apply(transform, table)
+    newfeat, fcache = applyfeat(transform, feat, prep)
 
-Apply the `transform` on the `table`. Return the `newtable` and a
-`cache` to revert the transform later.
+Implementation of [`apply`](@ref) without treatment of metadata.
+This function is intended for developers of new types.
 """
-function apply end
-
-"""
-    table = revert(transform, newtable, cache)
-
-Revert the `transform` on the `newtable` using the `cache` from the
-corresponding [`apply`](@ref) call and return the original `table`.
-Only defined when the `transform` [`isrevertible`](@ref).
-"""
-function revert end
+function applyfeat end
 
 """
-    Stateless
+    newmeta, mcache = applymeta(transform, meta, prep)
+
+Implementation of [`apply`](@ref) for metadata.
+This function is intended for developers of new types.
+"""
+function applymeta end
+
+"""
+    feat = revertfeat(transform, newfeat, fcache)
+
+Implementation of [`revert`](@ref) without treatment of metadata.
+This function is intended for developers of new types.
+"""
+function revertfeat end
+
+"""
+    meta = revertmeta(transform, newmeta, mcache)
+
+Implementation of [`revert`](@ref) for metadata.
+This function is intended for developers of new types.
+"""
+function revertmeta end
+
+"""
+    StatelessFeatureTransform
 
 This trait is useful to signal that we can [`reapply`](@ref) a transform
 "fitted" with training data to "test" data without relying on the `cache`.
 """
-abstract type Stateless <: Transform end
+abstract type StatelessFeatureTransform <: FeatureTransform end
 
 """
-    reapply(transform, table, cache)
+    newfeat = reapplyfeat(transform, feat, fcache)
 
-Reapply the `transform` to (a possibly different) `table` using a `cache`
-that was created with a previous [`apply`](@ref) call.
+Implementation of [`reapply`](@ref) without treatment of metadata.
+This function is intended for developers of new types.
 """
-function reapply end
+function reapplyfeat end
 
 """
-    Colwise
+    newmeta = reapplymeta(transform, meta, mcache)
 
-A transform that is applied column-by-column. In this case, the new type
-only needs to implement [`colapply`](@ref), [`colrevert`](@ref) and
-[`colcache`](@ref). Efficient fallbacks are provided that execute these
-functions in parallel for all columns with multiple threads.
+Implementation of [`reapply`](@ref) for metadata.
+This function is intended for developers of new types.
 """
-abstract type Colwise <: Transform end
+function reapplymeta end
+
+"""
+    ColwiseFeatureTransform
+
+A feature transform that is applied column-by-column. In this case, the
+new type only needs to implement [`colapply`](@ref), [`colrevert`](@ref)
+and [`colcache`](@ref). Efficient fallbacks are provided that execute
+these functions in parallel for all columns with multiple threads.
+
+## Notes
+
+* All ColwiseFeatureTransform subtypes must have a `colspec` field.
+"""
+abstract type ColwiseFeatureTransform <: FeatureTransform end
 
 """
     y = colapply(transform, x, c)
@@ -105,61 +123,73 @@ function colcache end
 # TRANSFORM FALLBACKS
 # --------------------
 
-assertions(transform::Transform) = assertions(typeof(transform))
-assertions(::Type{<:Transform}) = []
+function apply(transform::FeatureTransform, table)
+  feat, meta = divide(table)
 
-isrevertible(transform::Transform) = isrevertible(typeof(transform))
-isrevertible(::Type{<:Transform}) = false
+  prep = preprocess(transform, table)
 
-(transform::Transform)(table) = apply(transform, table) |> first
+  newfeat, fcache = applyfeat(transform, feat, prep)
+  newmeta, mcache = applymeta(transform, meta, prep)
 
-# Generic shows
-function Base.show(io::IO, transform::Transform)
-  T = typeof(transform)
-  vals = getfield.(Ref(transform), fieldnames(T))
-  strs = repr.(vals, context=io)
-  print(io, "$(nameof(T))($(join(strs, ", ")))")
+  attach(newfeat, newmeta), (fcache, mcache)
 end
 
-function Base.show(io::IO, ::MIME"text/plain", transform::Transform)
-  T = typeof(transform)
-  print(io, "$(nameof(T)) transform")
-  
-  fnames = fieldnames(T)
-  len = length(fnames)
-  for (i, field) in enumerate(fnames)
-    div = i == len ? "\n└─ " : "\n├─ "
-    val = getfield(transform, field)
-    str = repr(val, context=io)
-    print(io, "$div$field = $str")
-  end
+function revert(transform::FeatureTransform, newtable, cache)
+  newfeat, newmeta = divide(newtable)
+  fcache,   mcache = cache
+
+  feat = revertfeat(transform, newfeat, fcache)
+  meta = revertmeta(transform, newmeta, mcache)
+
+  attach(feat, meta)
 end
+
+function reapply(transform::FeatureTransform, table, cache)
+  feat,     meta = divide(table)
+  fcache, mcache = cache
+
+  newfeat = reapplyfeat(transform, feat, fcache)
+  newmeta = reapplymeta(transform, meta, mcache)
+
+  attach(newfeat, newmeta)
+end
+
+applymeta(::FeatureTransform, meta, prep) = meta, nothing
+revertmeta(::FeatureTransform, newmeta, mcache) = newmeta
+reapplymeta(::FeatureTransform, meta, mcache) = meta
 
 # --------------------
 # STATELESS FALLBACKS
 # --------------------
 
-reapply(transform::Stateless, table, cache) = apply(transform, table) |> first
+reapply(transform::StatelessFeatureTransform, table, cache) =
+  apply(transform, table) |> first
 
 # ------------------
 # COLWISE FALLBACKS
 # ------------------
 
-function apply(transform::Colwise, table)
+function applyfeat(transform::ColwiseFeatureTransform, feat, prep)
   # basic checks
   for assertion in assertions(transform)
-    assertion(table)
+    assertion(feat)
   end
 
   # retrieve column names and values
-  cols  = Tables.columns(table)
-  names = Tables.columnnames(cols)
+  cols   = Tables.columns(feat)
+  names  = Tables.columnnames(cols)
+  snames = choose(transform.colspec, names)
 
   # function to transform a single column
   function colfunc(n)
     x = Tables.getcolumn(cols, n)
-    c = colcache(transform, x)
-    y = colapply(transform, x, c)
+    if n ∈ snames
+      c = colcache(transform, x)
+      y = colapply(transform, x, c)
+    else
+      c = nothing
+      y = x
+    end
     (n => y), c
   end
 
@@ -167,29 +197,32 @@ function apply(transform::Colwise, table)
   vals = tcollect(colfunc(n) for n in names)
 
   # new table with transformed columns
-  𝒯 = (; first.(vals)...) |> Tables.materializer(table)
+  𝒯 = (; first.(vals)...)
+  newfeat = 𝒯 |> Tables.materializer(feat)
 
   # cache values for each column
-  𝒞 = last.(vals)
+  caches = last.(vals)
 
   # return new table and cache
-  𝒯, 𝒞
+  newfeat, (caches, snames)
 end
 
-function revert(transform::Colwise, newtable, cache)
+function revertfeat(transform::ColwiseFeatureTransform, newfeat, fcache)
   # basic checks
   @assert isrevertible(transform) "transform is not revertible"
 
   # transformed columns
-  cols  = Tables.columns(newtable)
+  cols  = Tables.columns(newfeat)
   names = Tables.columnnames(cols)
+  
+  caches, snames = fcache
   
   # function to transform a single column
   function colfunc(i)
     n = names[i]
-    c = cache[i]
+    c = caches[i]
     y = Tables.getcolumn(cols, n)
-    x = colrevert(transform, y, c)
+    x = n ∈ snames ? colrevert(transform, y, c) : y
     n => x
   end
 
@@ -197,28 +230,30 @@ function revert(transform::Colwise, newtable, cache)
   vals = tcollect(colfunc(i) for i in 1:length(names))
 
   # new table with transformed columns
-  (; vals...) |> Tables.materializer(newtable)
+  (; vals...) |> Tables.materializer(newfeat)
 end
 
-function reapply(transform::Colwise, table, cache)
+function reapplyfeat(transform::ColwiseFeatureTransform, feat, fcache)
   # basic checks
   for assertion in assertions(transform)
-    assertion(table)
+    assertion(feat)
   end
 
   # retrieve column names and values
-  cols  = Tables.columns(table)
+  cols  = Tables.columns(feat)
   names = Tables.columnnames(cols)
+
+  caches, snames = fcache
   
   # check that cache is valid
-  @assert length(names) == length(cache) "invalid cache for table"
+  @assert length(names) == length(caches) "invalid caches for feat"
 
   # function to transform a single column
   function colfunc(i)
     n = names[i]
-    c = cache[i]
+    c = caches[i]
     x = Tables.getcolumn(cols, n)
-    y = colapply(transform, x, c)
+    y = n ∈ snames ? colapply(transform, x, c) : x
     n => y
   end
 
@@ -226,7 +261,7 @@ function reapply(transform::Colwise, table, cache)
   vals = tcollect(colfunc(i) for i in 1:length(names))
 
   # new table with transformed columns
-  (; vals...) |> Tables.materializer(table)
+  (; vals...) |> Tables.materializer(feat)
 end
 
 # ----------------
@@ -253,5 +288,4 @@ include("transforms/functional.jl")
 include("transforms/eigenanalysis.jl")
 include("transforms/rowtable.jl")
 include("transforms/coltable.jl")
-include("transforms/sequential.jl")
 include("transforms/parallel.jl")

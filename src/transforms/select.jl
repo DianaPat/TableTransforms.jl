@@ -6,21 +6,24 @@ struct TableSelection{T,C}
   table::T
   cols::C
   names::Vector{Symbol}
-  function TableSelection(table::T, names::Vector{Symbol}) where {T}
+  onames::Vector{Symbol}
+  mapnames::Dict{Symbol,Symbol}
+  function TableSelection(table::T, names, onames) where {T}
     cols = Tables.columns(table)
-    @assert names ⊆ Tables.columnnames(cols)
-    new{T,typeof(cols)}(table, cols, names)
+    @assert onames ⊆ Tables.columnnames(cols)
+    new{T,typeof(cols)}(table, cols, names, onames, Dict(zip(names, onames)))
   end
 end
 
 function Base.:(==)(a::TableSelection, b::TableSelection)
-  a.names != b.names && return false
+  a.names  != b.names  && return false
+  a.onames != b.onames && return false
   all(Tables.getcolumn(a, nm) == Tables.getcolumn(b, nm) for nm in a.names)
 end
 
 function Base.show(io::IO, t::TableSelection)
   println(io, "TableSelection")
-  pretty_table(io, t, vcrop_mode=:middle)
+  pretty_table(io, t, vcrop_mode=:middle, newline_at_end=false)
 end
 
 # Tables.jl interface
@@ -32,14 +35,14 @@ Tables.getcolumn(t::TableSelection, i::Int) =
   Tables.getcolumn(t.cols, t.names[i])
 function Tables.getcolumn(t::TableSelection, nm::Symbol)
   nm ∉ t.names && error("Table has no column $nm.")
-  Tables.getcolumn(t.cols, nm)
+  Tables.getcolumn(t.cols, t.mapnames[nm])
 end
 
 function Tables.schema(t::TableSelection)
   schema = Tables.schema(t.table)
   names = schema.names
   types = schema.types
-  inds = indexin(t.names, collect(names))
+  inds = indexin(t.onames, collect(names))
   Tables.Schema(t.names, types[inds])
 end
 
@@ -52,6 +55,11 @@ Tables.materializer(t::TableSelection) =
     Select((col₁, col₂, ..., colₙ))
     
 The transform that selects columns `col₁`, `col₂`, ..., `colₙ`.
+
+    Select(col₁ => newcol₁, col₂ => newcol₂, ..., colₙ => newcolₙ)
+
+Selects the columns `col₁`, `col₂`, ..., `colₙ`
+and rename them to `newcol₁`, `newcol₂`, ..., `newcolₙ`.
     
     Select(regex)
 
@@ -63,29 +71,42 @@ Selects the columns that match with `regex`.
 Select(1, 3, 5)
 Select([:a, :c, :e])
 Select(("a", "c", "e"))
+Select(1 => :x, 3 => :y)
+Select(:a => :x, :b => :y)
+Select("a" => "x", "b" => "y")
 Select(r"[ace]")
 ```
 """
-struct Select{S<:ColSpec} <: Stateless
+struct Select{S<:ColSpec} <: StatelessFeatureTransform
   colspec::S
+  newnames::Union{Vector{Symbol},Nothing}
 end
 
-Select(spec) = Select(colspec(spec))
+Select(spec) = Select(colspec(spec), nothing)
+Select(cols::T...) where {T<:Col} = Select(cols)
 
-Select(cols::T...) where {T<:Col} = 
-  Select(colspec(cols))
+Select(pairs::Pair{T,Symbol}...) where {T<:Col} = 
+  Select(colspec(first.(pairs)), collect(last.(pairs)))
+
+Select(pairs::Pair{T,S}...) where {T<:Col,S<:AbstractString} = 
+  Select(colspec(first.(pairs)), collect(Symbol.(last.(pairs))))
 
 Select() = throw(ArgumentError("Cannot create a Select object without arguments."))
 
 isrevertible(::Type{<:Select}) = true
 
-function apply(transform::Select, table)
+# utils
+_newnames(::Nothing, select) = select
+_newnames(names::Vector{Symbol}, select) = names
+
+function applyfeat(transform::Select, feat, prep)
   # original columns
-  cols = Tables.columns(table)
+  cols = Tables.columns(feat)
 
   # retrieve relevant column names
   allcols = collect(Tables.columnnames(cols))
   select  = choose(transform.colspec, allcols)
+  names   = _newnames(transform.newnames, select)
   reject  = setdiff(allcols, select)
 
   # keep track of indices to revert later
@@ -93,40 +114,40 @@ function apply(transform::Select, table)
   rinds = indexin(reject, allcols)
 
   # sort indices to facilitate reinsertion
-  sperm  = sortperm(sinds)
-  sorted = sortperm(rinds)
-  reject = reject[sorted]
-  rinds  = rinds[sorted]
+  sperm = sortperm(sinds)
 
   # rejected columns
-  rcols = [Tables.getcolumn(cols, name) for name in reject]
+  rcolumns = [Tables.getcolumn(cols, name) for name in reject]
 
-  TableSelection(table, select), (reject, rcols, sperm, rinds)
+  fcache  = (select, sperm, reject, rcolumns, rinds)
+  newfeat = TableSelection(feat, names, select)
+  newfeat, fcache
 end
 
-function revert(::Select, newtable, cache)
+function revertfeat(::Select, newfeat, fcache)
   # selected columns
-  cols   = Tables.columns(newtable)
-  select = Tables.columnnames(cols)
+  cols  = Tables.columns(newfeat)
+  names = Tables.columnnames(cols)
   # https://github.com/JuliaML/TableTransforms.jl/issues/76
-  scols  = Any[Tables.getcolumn(cols, name) for name in select]
+  columns = Any[Tables.getcolumn(cols, name) for name in names]
 
   # rejected columns
-  reject, rcols, sperm, rinds = cache
+  select, sperm, reject, rcolumns, rinds = fcache
 
   # restore rejected columns
-  anames = collect(select[sperm])
-  acols  = collect(scols[sperm])
+  onames = select[sperm]
+  ocolumns = columns[sperm]
   for (i, rind) in enumerate(rinds)
-    insert!(anames, rind, reject[i])
-    insert!(acols, rind, rcols[i])
+    insert!(onames, rind, reject[i])
+    insert!(ocolumns, rind, rcolumns[i])
   end
-  𝒯 = (; zip(anames, acols)...)
-  𝒯 |> Tables.materializer(newtable)
+
+  𝒯 = (; zip(onames, ocolumns)...)
+  𝒯 |> Tables.materializer(newfeat)
 end
 
 # reverting a single TableSelection is trivial
-revert(::Select, newtable::TableSelection, cache) = newtable.table
+revertfeat(::Select, newfeat::TableSelection, fcache) = newfeat.table
 
 """
     Reject(col₁, col₂, ..., colₙ)
@@ -148,7 +169,7 @@ Reject((2, 4, 6))
 Reject(r"[bdf]")
 ```
 """
-struct Reject{S<:ColSpec} <: Stateless
+struct Reject{S<:ColSpec} <: StatelessFeatureTransform
   colspec::S
 end
 
@@ -163,17 +184,17 @@ Reject(::AllSpec) = throw(ArgumentError("Cannot reject all columns."))
 
 isrevertible(::Type{<:Reject}) = true
 
-function apply(transform::Reject, table)
-  cols = Tables.columns(table)
+function applyfeat(transform::Reject, feat, prep)
+  cols    = Tables.columns(feat)
   allcols = Tables.columnnames(cols)
   reject  = choose(transform.colspec, allcols)
   select  = setdiff(allcols, reject)
   strans  = Select(select)
-  newtable, scache = apply(strans, table)
-  newtable, (strans, scache)
+  newfeat, sfcache = applyfeat(strans, feat, prep)
+  newfeat, (strans, sfcache)
 end
 
-function revert(::Reject, newtable, cache)
-  strans, scache = cache
-  revert(strans, newtable, scache)
+function revertfeat(::Reject, newfeat, fcache)
+  strans, sfcache = fcache
+  revertfeat(strans, newfeat, sfcache)
 end

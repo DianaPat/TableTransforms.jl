@@ -16,7 +16,7 @@ using ScientificTypes
 Coerce(:col1 => Continuous, :col2 => Count)
 ```
 """
-struct Coerce{P} <: Transform
+struct Coerce{P} <: FeatureTransform
   pairs::P
   tight::Bool
   verbosity::Int
@@ -27,25 +27,25 @@ Coerce(pair::Pair{Symbol,<:Type}...; tight=false, verbosity=1) =
 
 isrevertible(::Type{<:Coerce}) = true
 
-function apply(transform::Coerce, table)
-  newtable = coerce(table, transform.pairs...;
+function applyfeat(transform::Coerce, feat, prep)
+  newtable = coerce(feat, transform.pairs...;
                     tight=transform.tight,
                     verbosity=transform.verbosity)
 
-  types = Tables.schema(table).types
+  types = Tables.schema(feat).types
   
   newtable, types
 end
 
-function revert(transform::Coerce, newtable, cache)
-  cols = Tables.columns(newtable)
+function revertfeat(::Coerce, newfeat, fcache)
+  cols = Tables.columns(newfeat)
   names = Tables.columnnames(cols)
   
-  oldcols = map(zip(cache, names)) do (T, n)
+  oldcols = map(zip(fcache, names)) do (T, n)
     x = Tables.getcolumn(cols, n)
     collect(T, x)
   end
     
   𝒯 = (; zip(names, oldcols)...)
-  𝒯 |> Tables.materializer(newtable)
+  𝒯 |> Tables.materializer(newfeat)
 end

@@ -18,33 +18,55 @@ Filter(row -> row.a == true && row.b < 30)
 
 * The schema of the table is preserved by the transform.
 """
-struct Filter{F} <: Stateless
+struct Filter{F} <: StatelessFeatureTransform
   func::F 
 end
 
 isrevertible(::Type{<:Filter}) = true
 
-function apply(transform::Filter, table)
-  rows = Tables.rowtable(table)
+function preprocess(transform::Filter, table)
+  # lazy row iterator
+  rows  = Tables.rows(table)
 
-  # selected and rejected rows/inds
-  sinds = findall(transform.func, rows)
-  rinds = setdiff(1:length(rows), sinds)
-  srows = rows[sinds]
-  rrows = rows[rinds]
+  # selected indices
+  sinds, nrows = Int[], 0
+  for (i, row) in enumerate(rows)
+    transform.func(row) && push!(sinds, i)
+    nrows += 1
+  end
 
-  newtable = srows |> Tables.materializer(table)
-  return newtable, zip(rinds, rrows)
+  # rejected indices
+  rinds = setdiff(1:nrows, sinds)
+
+  sinds, rinds
 end
 
-function revert(::Filter, newtable, cache)
-  rows = Tables.rowtable(newtable)
+function applyfeat(::Filter, feat, prep)
+  # collect all rows
+  rows = Tables.rowtable(feat)
 
-  for (i, row) in cache
+  # preprocessed indices
+  sinds, rinds = prep
+
+  # select/reject rows
+  srows = view(rows, sinds)
+  rrows = view(rows, rinds)
+
+  newfeat = srows |> Tables.materializer(feat)
+
+  newfeat, (rinds, rrows)
+end
+
+function revertfeat(::Filter, newfeat, fcache)
+  # collect all rows
+  rows = Tables.rowtable(newfeat)
+
+  rinds, rrows = fcache
+  for (i, row) in zip(rinds, rrows)
     insert!(rows, i, row)
   end
 
-  rows |> Tables.materializer(newtable)
+  rows |> Tables.materializer(newfeat)
 end
 
 """
@@ -77,7 +99,7 @@ DropMissing(r"[bce]")
 
 * The transform can alter the element type of columns from `Union{Missing,T}` to `T`.
 """
-struct DropMissing{S<:ColSpec} <: Stateless
+struct DropMissing{S<:ColSpec} <: StatelessFeatureTransform
   colspec::S
 end
 
@@ -101,38 +123,49 @@ _nonmissing(::Type{T}, x) where {T} = x
 _nonmissing(::Type{Union{Missing,T}}, x) where {T} = collect(T, x)
 _nonmissing(x) = _nonmissing(eltype(x), x)
 
-function apply(transform::DropMissing, table)
-  cols = Tables.columns(table)
-  names = Tables.columnnames(cols)
-  types = Tables.schema(table).types
+function preprocess(transform::DropMissing, table)
+  schema = Tables.schema(table)
+  names  = schema.names
   snames = choose(transform.colspec, names)
   ftrans = _ftrans(transform, snames)
-  newtable, fcache = apply(ftrans, table)
-
-  # post-processing
-  ncols = Tables.columns(newtable)
-  pcols = map(names) do n
-    x = Tables.getcolumn(ncols, n)
-    n ∈ snames ? _nonmissing(x) : x
-  end
-  𝒯 = (; zip(names, pcols)...)
-  ptable = 𝒯 |> Tables.materializer(newtable)
-
-  ptable, (ftrans, fcache, types)
+  fprep  = preprocess(ftrans, table)
+  ftrans, fprep, snames
 end
 
-function revert(::DropMissing, newtable, cache)
-  ftrans, fcache, types = cache
+function applyfeat(::DropMissing, feat, prep)
+  # apply filter transform
+  ftrans, fprep, snames = prep
+  newfeat, ffcache = applyfeat(ftrans, feat, fprep)
 
-  # pre-processing
-  cols = Tables.columns(newtable)
+  # drop Missing type
+  cols  = Tables.columns(newfeat)
   names = Tables.columnnames(cols)
-  pcols = map(zip(types, names)) do (T, n)
+  ncols = map(names) do n
     x = Tables.getcolumn(cols, n)
+    n ∈ snames ? _nonmissing(x) : x
+  end
+  𝒯 = (; zip(names, ncols)...)
+  newfeat = 𝒯 |> Tables.materializer(feat)
+
+  # original column types
+  types = Tables.schema(feat).types
+
+  newfeat, (ftrans, ffcache, types)
+end
+
+function revertfeat(::DropMissing, newfeat, fcache)
+  ftrans, ffcache, types = fcache
+
+  # reintroduce Missing type
+  ncols = Tables.columns(newfeat)
+  names = Tables.columnnames(ncols)
+  ocols = map(zip(types, names)) do (T, n)
+    x = Tables.getcolumn(ncols, n)
     collect(T, x)
   end
-  𝒯 = (; zip(names, pcols)...)
-  ptable = 𝒯 |> Tables.materializer(newtable)
+  𝒯 = (; zip(names, ocols)...)
+  otable = 𝒯 |> Tables.materializer(newfeat)
 
-  revert(ftrans, ptable, fcache)
+  # revert filter transform
+  revertfeat(ftrans, otable, ffcache)
 end
